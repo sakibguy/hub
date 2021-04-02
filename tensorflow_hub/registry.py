@@ -14,9 +14,13 @@
 # ==============================================================================
 """Internal. Registry holds python objects that can be injected."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+from absl import logging
+
+
+def _clear():
+  """Clear resolvers and loaders."""
+  resolver.clear_implementations()
+  loader.clear_implementations()
 
 
 class MultiImplRegister(object):
@@ -32,17 +36,24 @@ class MultiImplRegister(object):
     self._name = name
     self._impls = []
 
+  def clear_implementations(self):
+    """Remove all implementations."""
+    self._impls = []
+
   def add_implementation(self, impl):
     """Register an implementation."""
     self._impls += [impl]
 
   def __call__(self, *args, **kwargs):
+    fails = []
     for impl in reversed(self._impls):
       if impl.is_supported(*args, **kwargs):
         return impl(*args, **kwargs)
+      else:
+        fails.append(type(impl).__name__)
     raise RuntimeError(
-        "Missing implementation that supports: %s(*%r, **%r)" % (
-            self._name, args, kwargs))
+        "Missing implementation that supports: %s(*%r, **%r). Tried %r" % (
+            self._name, args, kwargs, fails))
 
 
 resolver = MultiImplRegister("resolver")

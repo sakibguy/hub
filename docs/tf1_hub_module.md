@@ -1,27 +1,26 @@
-# hub.Modules in TensorFlow 1
+<!--* freshness: { owner: 'maringeo' reviewed: '2020-12-29' review_interval: '3 months' } *-->
 
-At its launch in 2018, TensorFlow Hub offered a single type of asset:
-hub.Modules for import into TensorFlow 1 programs.
+# TF1 Hub format
 
-This page explains how to use hub.Modules in TensorFlow 1
-(or the TF1 compatibility mode of TF2) with the `hub.Module` class
-and associated APIs. (The typical use is to build a `tf.Graph`,
-possibly inside a TF1 `Estimator`, by combining one or more `hub.Modules`
-with `tf.compat.layers` or `tf.layers`).
+At its launch in 2018, TensorFlow Hub offered a single type of asset: TF1 Hub
+format for import into TensorFlow 1 programs.
+
+This page explains how to use TF1 Hub format in TF1 (or the TF1 compatibility
+mode of TF2) with the `hub.Module` class and associated APIs. (The typical use
+is to build a `tf.Graph`, possibly inside a TF1 `Estimator`, by combining one or
+more models in TF1 Hub format with `tf.compat.layers` or `tf.layers`).
 
 Users of TensorFlow 2 (outside TF1 compatibility mode) must use
-[the new API with `hub.load()` or `hub.KerasLayer`](tf2_saved_model.md).
-The new API loads the new TF2 SavedModel asset type, but also has
-limited [support for loading hub.Modules into TF2](migration_tf2.md).
+[the new API with `hub.load()` or `hub.KerasLayer`](tf2_saved_model.md). The new
+API loads the new TF2 SavedModel asset type, but also has limited
+[support for loading TF1 Hub format into TF2](migration_tf2.md).
 
+## Using a model in TF1 Hub format
 
-## Using a Module
+### Instantiating a model in TF1 Hub format
 
-### Instantiating a Module
-
-A hub.Module is imported into a TensorFlow program by
-creating a `hub.Module` object from a string with its URL or filesystem path,
-such as:
+A model in TF1 Hub format is imported into a TensorFlow program by creating a
+`hub.Module` object from a string with its URL or filesystem path, such as:
 
 ```python
 m = hub.Module("path/to/a/module_dir")
@@ -33,24 +32,10 @@ Likewise, tables and other state is added to the graph.
 
 ### Caching Modules
 
-When creating a module from a URL, the module content is downloaded
-and cached in the local system temporary directory. The location where
-modules are cached can be overridden using `TFHUB_CACHE_DIR` environment
-variable.
-
-For example, setting `TFHUB_CACHE_DIR` to `/my_module_cache`:
-
-```shell
-$ export TFHUB_CACHE_DIR=/my_module_cache
-```
-
-and then creating a module from a URL:
-
-```python
-m = hub.Module("https://tfhub.dev/google/progan-128/1")
-```
-
-results in downloading and unpacking the module into `/my_module_cache`.
+When creating a module from a URL, the module content is downloaded and cached
+in the local system temporary directory. The location where modules are cached
+can be overridden using `TFHUB_CACHE_DIR` environment variable. For details, see
+[Caching](caching.md).
 
 ### Applying a Module
 
@@ -95,7 +80,7 @@ handle additional outputs gracefully.
 ### Trying out alternative modules
 
 Whenever there are multiple modules for the same task, TensorFlow Hub
-encourages to equip them with compatible signartures (interfaces)
+encourages to equip them with compatible signatures (interfaces)
 such that trying different ones is as easy as varying the module handle
 as a string-valued hyperparameter.
 
@@ -107,18 +92,16 @@ To this end, we maintain a collection of recommended
 
 ### Compatibility note
 
-The hub.Module format is geared towards TensorFlow 1.
-It is only partially supported by TF Hub in TensorFlow 2.
-Please do consider publishing in the new
+The TF1 Hub format is geared towards TensorFlow 1. It is only partially
+supported by TF Hub in TensorFlow 2. Please do consider publishing in the new
 [TF2 SavedModel](tf2_saved_model.md) format instead.
 
-The hub.Module format is similar to the SavedModel format of TensorFlow 1
-on a syntactic level (same file names and protocol messages) but semantically
+The TF1 Hub format is similar to the SavedModel format of TensorFlow 1 on a
+syntactic level (same file names and protocol messages) but semantically
 different to allow for module reuse, composition and re-training (e.g.,
-different storage of resource initializers, different tagging conventions
-for metagraphs). The easiest way to tell them apart on disk is the
-presence or absence of the `tfhub_module.pb` file.
-
+different storage of resource initializers, different tagging conventions for
+metagraphs). The easiest way to tell them apart on disk is the presence or
+absence of the `tfhub_module.pb` file.
 
 ### General approach
 

@@ -18,14 +18,7 @@ The module has as a single signature, accepting a batch of images with shape
 [None, 28, 28, 1] and returning a prediction vector.
 In this example, we are loading the MNIST Dataset from TFDS and training a
 simple digit classifier.
-
-For a more realistic exporting example, see:
-tensorflow/examples/saved_model/integration_tests/export_mnist_cnn.py.
 """
-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 
 import argparse
 import logging
@@ -41,7 +34,7 @@ class MNIST(tf.keras.models.Model):
   """Model representing a MNIST classifier."""
 
   def __init__(self, output_activation="softmax"):
-    super(MNIST, self).__init__()
+    super().__init__()
     self.layer_1 = tf.keras.layers.Dense(64)
     self.layer_2 = tf.keras.layers.Dense(10, activation=output_activation)
 

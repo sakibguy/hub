@@ -13,33 +13,25 @@
 # limitations under the License.
 # ==============================================================================
 """Configuration to bind implementations on the API."""
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 
 from tensorflow_hub import compressed_module_resolver
 from tensorflow_hub import native_module
 from tensorflow_hub import registry
 from tensorflow_hub import resolver
+from tensorflow_hub import uncompressed_module_resolver
 
 
-def _get_default_resolvers():
-  return [
-      resolver.FailResolver(),
+def _install_default_resolvers():
+  for impl in [
       resolver.PathResolver(),
+      uncompressed_module_resolver.HttpUncompressedFileResolver(),
       compressed_module_resolver.GcsCompressedFileResolver(),
-      compressed_module_resolver.HttpCompressedFileResolver(),
-  ]
-
-
-def _get_default_loaders():
-  return [
-      native_module.Loader(),
-  ]
+      compressed_module_resolver.HttpCompressedFileResolver()
+  ]:
+    registry.resolver.add_implementation(impl)
 
 
 def _run():
-  for impl in _get_default_resolvers():
-    registry.resolver.add_implementation(impl)
-  for impl in _get_default_loaders():
-    registry.loader.add_implementation(impl)
+  _install_default_resolvers()
+
+  registry.loader.add_implementation(native_module.Loader())

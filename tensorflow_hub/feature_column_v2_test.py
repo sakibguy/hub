@@ -14,10 +14,6 @@
 # ==============================================================================
 """Tests for tensorflow_hub.feature_column."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import logging
 import os
 import numpy as np
@@ -63,7 +59,7 @@ class TextEmbedding(tf.train.Checkpoint):
 class TextEmbeddingColumnTest(tf.test.TestCase):
 
   def setUp(self):
-    super(TextEmbeddingColumnTest, self).setUp()
+    super().setUp()
     self.model = os.path.join(self.get_temp_dir(), "model")
     tf.saved_model.save(TextEmbedding(), self.model)
     self.model_returning_dicts = os.path.join(self.get_temp_dir(),
@@ -131,7 +127,6 @@ class TextEmbeddingColumnTest(tf.test.TestCase):
 
   def testLoadingDifferentFeatureColumnsFails(self):
     features = [
-        np.array(["hello world", "pair-programming"]),
         np.array(["hello world", "pair-programming"]),
     ]
     label = np.int64([0, 1])
@@ -231,7 +226,7 @@ class TextEmbeddingColumnTest(tf.test.TestCase):
 
 if __name__ == "__main__":
   # This test is only supported in TF2 mode and only in TensorFlow version that
-  # has the following symbol:
+  # has the following symbol (expected from TF2.3 onwards):
   # tensorflow.python.feature_column.feature_column_v2.StateManager.has_resource
   if tf.executing_eagerly() and hasattr(feature_column_v2.StateManager,
                                         "has_resource"):

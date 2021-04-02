@@ -1,17 +1,19 @@
+<!--* freshness: { owner: 'maringeo' reviewed: '2021-04-01' review_interval: '3 months' } *-->
+
 # SavedModels from TF Hub in TensorFlow 2
 
-The [SavedModel format of
-TensorFlow 2](https://www.tensorflow.org/guide/saved_model)
-is the recommended way to share pre-trained models and model pieces
-on TensorFlow Hub. It replaces the older [hub.Module format for
-TensorFlow 1](tf1_hub_module.md) and comes with a new set of APIs.
+The
+[SavedModel format of TensorFlow 2](https://www.tensorflow.org/guide/saved_model)
+is the recommended way to share pre-trained models and model pieces on
+TensorFlow Hub. It replaces the older [TF1 Hub format](tf1_hub_module.md) and
+comes with a new set of APIs.
 
-This page explains how to reuse TF2 SavedModels in a TensorFlow 2
-program with the low-level `hub.load()` API and its `hub.KerasLayer`
-wrapper. (Typically, `hub.KerasLayer` is combined with other `tf.keras.layers`
-to build a Keras model or the `model_fn` of a TF2 Estimator.)
-These APIs can also load the older hub.Modules for TF1, within limits,
-see the [migration guide](migration_tf2.md).
+This page explains how to reuse TF2 SavedModels in a TensorFlow 2 program with
+the low-level `hub.load()` API and its `hub.KerasLayer` wrapper. (Typically,
+`hub.KerasLayer` is combined with other `tf.keras.layers` to build a Keras model
+or the `model_fn` of a TF2 Estimator.) These APIs can also load the legacy
+models in TF1 Hub format, within limits, see the
+[compatibility guide](model_compatibility.md).
 
 Users of TensorFlow 1 can update to TF 1.15 and then use the same APIs.
 Older versions of TF1 do not work.
@@ -34,7 +36,7 @@ Here is an example of using a pre-trained text embedding:
 import tensorflow as tf
 import tensorflow_hub as hub
 
-hub_url = "https://tfhub.dev/google/tf2-preview/nnlm-en-dim128/1"
+hub_url = "https://tfhub.dev/google/nnlm-en-dim128/2"
 embed = hub.KerasLayer(hub_url)
 embeddings = embed(["A long sentence.", "single-word", "http://example.com"])
 print(embeddings.shape, embeddings.dtype)
@@ -70,12 +72,11 @@ writing their `model_fn` in terms of  `hub.KerasLayer` among other
 
 ### Behind the scenes: SavedModel downloading and caching
 
-Using a SavedModel from TensorFlow Hub
-(or other HTTPS servers that implement its [hosting](hosting.md) protocol)
-downloads it to the local filesystem if not already present.
-The environment variable `TFHUB_CACHE_DIR` can be set to override the default
-temporary location for caching the downloaded and uncompressed SavedModels.
-
+Using a SavedModel from TensorFlow Hub (or other HTTPS servers that implement
+its [hosting](hosting.md) protocol) downloads and decompresses it to the local
+filesystem if not already present. The environment variable `TFHUB_CACHE_DIR`
+can be set to override the default temporary location for caching the downloaded
+and uncompressed SavedModels. For details, see [Caching](caching.md).
 
 ### Using a SavedModel in low-level TensorFlow
 
@@ -169,9 +170,9 @@ piece_to_share.save(..., include_optimizer=False)
 
 [TensorFlow Models](https://github.com/tensorflow/models) on GitHub
 uses the former approach for BERT (see
-[nlp/bert/bert_models.py](https://github.com/tensorflow/models/blob/master/official/nlp/bert/bert_models.py)
-and [nlp/bert/export_tfhub.py](https://github.com/tensorflow/models/blob/master/official/nlp/bert/export_tfhub.py),
-note the split between `core_model` and `pretrain_model`)
+[nlp/tools/export_tfhub_lib.py](https://github.com/tensorflow/models/blob/master/official/nlp/tools/export_tfhub_lib.py),
+note the split between `core_model` for export and the `pretrainer` for
+restoring the checkpoint)
 and the the latter approach for ResNet (see
 [vision/image_classification/tfhub_export.py](https://github.com/tensorflow/models/blob/master/official/vision/image_classification/resnet/tfhub_export.py)).
 
@@ -188,7 +189,7 @@ Conceptually, this looks like
 ```python
 class MyMulModel(tf.train.Checkpoint):
   def __init__(self, v_init):
-    super(MyMulModel, self).__init__()
+    super().__init__()
     self.v = tf.Variable(v_init)
     self.variables = [self.v]
     self.trainable_variables = [self.v]
@@ -208,10 +209,6 @@ layer.trainable = True
 print(layer.trainable_weights)  # [2.]
 print(layer.losses)  # 0.004
 ```
-
-The code at
-[tensorflow/examples/saved_model/integration_tests/](https://github.com/tensorflow/tensorflow/tree/master/tensorflow/examples/saved_model/integration_tests)
-contains larger examples, esp. the `export_mnist.py` and `use_mnist.py` pair.
 
 
 ## Fine-Tuning
@@ -280,9 +277,7 @@ e.g., output logits instead of softmax probabilities or top-k predictions.
 If the model use dropout, batch normalization, or similar training techniques
 that involve hyperparameters, set them to values that make sense across many
 expected target problems and batch sizes. (As of this writing, saving from
-Keras does not make it easy to let consumers adjust them, but see
-[tensorflow/examples/saved_model/integration_tests/export_mnist_cnn.py](https://github.com/tensorflow/tensorflow/blob/master/tensorflow/examples/saved_model/integration_tests/export_mnist_cnn.py)
-for some crude workarounds.)
+Keras does not make it easy to let consumers adjust them.)
 
 Weight regularizers on individual layers are saved (with their regularization
 strength coefficients), but weight regularization from within the optimizer

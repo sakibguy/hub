@@ -14,28 +14,36 @@
 # ==============================================================================
 """Interface and common utility methods to perform module address resolution."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import abc
 import datetime
+import enum
 import os
 import socket
 import sys
 import tarfile
 import tempfile
 import time
+import urllib
 import uuid
 
 from absl import flags
 from absl import logging
 import tensorflow as tf
+from tensorflow_hub import file_utils
 from tensorflow_hub import tf_utils
-from tensorflow_hub import tf_v1
 
 
 FLAGS = flags.FLAGS
+
+
+class ModelLoadFormat(enum.Enum):
+  # Download compressed SavedModels and extract them to a local cache directory
+  COMPRESSED = "COMPRESSED"
+  # Directly read SavedModels from their GCS buckets without caching them
+  UNCOMPRESSED = "UNCOMPRESSED"
+  # This mode is currently unused and defaults to COMPRESSED.
+  AUTO = "AUTO"
+
 
 flags.DEFINE_string(
     "tfhub_cache_dir",
@@ -43,8 +51,28 @@ flags.DEFINE_string(
     "If set, TF-Hub will download and cache Modules into this directory. "
     "Otherwise it will attempt to find a network path.")
 
+flags.DEFINE_enum(
+    "tfhub_model_load_format", ModelLoadFormat.AUTO.value,
+    [model_load_format.value for model_load_format in ModelLoadFormat],
+    "If set to COMPRESSED, archived modules will be downloaded and extracted"
+    "to the `TFHUB_CACHE_DIR` before being loaded. If set to UNCOMPRESSED, the"
+    "modules will be read directly from their GCS storage location without"
+    "needing a cache dir. AUTO defaults to COMPRESSED behavior.")
+
 _TFHUB_CACHE_DIR = "TFHUB_CACHE_DIR"
 _TFHUB_DOWNLOAD_PROGRESS = "TFHUB_DOWNLOAD_PROGRESS"
+_TFHUB_MODEL_LOAD_FORMAT = "TFHUB_MODEL_LOAD_FORMAT"
+
+
+def get_env_setting(env_var, flag_name):
+  """Returns the environment variable or the specified flag."""
+
+  # Note: We are using FLAGS["tfhub_cache_dir"] (and not FLAGS.tfhub_cache_dir)
+  # to access the flag value in order to avoid parsing argv list. The flags
+  # should have been parsed by now in main() by tf.app.run(). If that was not
+  # the case (say in Colab env) we skip flag parsing because argv may contain
+  # unknown flags.
+  return os.getenv(env_var, "") or FLAGS[flag_name].value
 
 
 def tfhub_cache_dir(default_cache_dir=None, use_temp=False):
@@ -69,8 +97,7 @@ def tfhub_cache_dir(default_cache_dir=None, use_temp=False):
   # the case (say in Colab env) we skip flag parsing because argv may contain
   # unknown flags.
   cache_dir = (
-      os.getenv(_TFHUB_CACHE_DIR, "") or FLAGS["tfhub_cache_dir"].value or
-      default_cache_dir)
+      get_env_setting(_TFHUB_CACHE_DIR, "tfhub_cache_dir") or default_cache_dir)
   if not cache_dir and use_temp:
     # Place all TF-Hub modules under <system's temp>/tfhub_modules.
     cache_dir = os.path.join(tempfile.gettempdir(), "tfhub_modules")
@@ -80,9 +107,14 @@ def tfhub_cache_dir(default_cache_dir=None, use_temp=False):
   return cache_dir
 
 
+def model_load_format():
+  """Returns the load mode to use."""
+  return get_env_setting(_TFHUB_MODEL_LOAD_FORMAT, "tfhub_model_load_format")
+
+
 def create_local_module_dir(cache_dir, module_name):
   """Creates and returns the name of directory where to cache a module."""
-  tf_v1.gfile.MakeDirs(cache_dir)
+  tf.compat.v1.gfile.MakeDirs(cache_dir)
   return os.path.join(cache_dir, module_name)
 
 
@@ -143,19 +175,6 @@ class DownloadManager(object):
     """Returns true if interactive logging is enabled."""
     return os.getenv(_TFHUB_DOWNLOAD_PROGRESS, "")
 
-  def _extract_file(self, tgz, tarinfo, dst_path, buffer_size=10<<20):
-    """Extracts 'tarinfo' from 'tgz' and writes to 'dst_path'."""
-    src = tgz.extractfile(tarinfo)
-    dst = tf_v1.gfile.GFile(dst_path, "wb")
-    while 1:
-      buf = src.read(buffer_size)
-      if not buf:
-        break
-      dst.write(buf)
-      self._log_progress(len(buf))
-    dst.close()
-    src.close()
-
   def download_and_uncompress(self, fileobj, dst_path):
     """Streams the content for the 'fileobj' and stores the result in dst_path.
 
@@ -167,48 +186,20 @@ class DownloadManager(object):
       ValueError: Unknown object encountered inside the TAR file.
     """
     try:
-      with tarfile.open(mode="r|*", fileobj=fileobj) as tgz:
-        for tarinfo in tgz:
-          abs_target_path = _merge_relative_path(dst_path, tarinfo.name)
-
-          if tarinfo.isfile():
-            self._extract_file(tgz, tarinfo, abs_target_path)
-          elif tarinfo.isdir():
-            tf_v1.gfile.MakeDirs(abs_target_path)
-          else:
-            # We do not support symlinks and other uncommon objects.
-            raise ValueError(
-                "Unexpected object type in tar archive: %s" % tarinfo.type)
-
-        total_size_str = tf_utils.bytes_to_readable_str(
-            self._total_bytes_downloaded, True)
-        self._print_download_progress_msg(
-            "Downloaded %s, Total size: %s" % (self._url, total_size_str),
-            flush=True)
+      file_utils.extract_tarfile_to_destination(
+          fileobj, dst_path, log_function=self._log_progress)
+      total_size_str = tf_utils.bytes_to_readable_str(
+          self._total_bytes_downloaded, True)
+      self._print_download_progress_msg(
+          "Downloaded %s, Total size: %s" % (self._url, total_size_str),
+          flush=True)
     except tarfile.ReadError:
       raise IOError("%s does not appear to be a valid module." % self._url)
 
 
 def _merge_relative_path(dst_path, rel_path):
   """Merge a relative tar file to a destination (which can be "gs://...")."""
-  # Convert rel_path to be relative and normalize it to remove ".", "..", "//",
-  # which are valid directories in fileystems like "gs://".
-  norm_rel_path = os.path.normpath(rel_path.lstrip("/"))
-
-  if norm_rel_path == ".":
-    return dst_path
-
-  # Check that the norm rel path does not starts with "..".
-  if norm_rel_path.startswith(".."):
-    raise ValueError("Relative path %r is invalid." % rel_path)
-
-  merged = os.path.join(dst_path, norm_rel_path)
-
-  # After merging verify that the merged path keeps the original dst_path.
-  if not merged.startswith(dst_path):
-    raise ValueError("Relative path %r is invalid. Failed to merge with %r." % (
-        rel_path, dst_path))
-  return merged
+  return file_utils.merge_relative_path(dst_path, rel_path)
 
 
 def _module_descriptor_file(module_dir):
@@ -273,9 +264,9 @@ def _temp_download_dir(module_dir, task_uid):
 def _dir_size(directory):
   """Returns total size (in bytes) of the given 'directory'."""
   size = 0
-  for elem in tf_v1.gfile.ListDirectory(directory):
+  for elem in tf.compat.v1.gfile.ListDirectory(directory):
     elem_full_path = os.path.join(directory, elem)
-    stat = tf_v1.gfile.Stat(elem_full_path)
+    stat = tf.compat.v1.gfile.Stat(elem_full_path)
     size += _dir_size(elem_full_path) if stat.is_directory else stat.length
   return size
 
@@ -309,7 +300,7 @@ def _wait_for_lock_to_disappear(handle, lock_file, lock_file_timeout_sec):
   locked_tmp_dir_size = 0
   locked_tmp_dir_size_check_time = time.time()
   lock_file_content = None
-  while tf_v1.gfile.Exists(lock_file):
+  while tf.compat.v1.gfile.Exists(lock_file):
     try:
       logging.log_every_n(
           logging.INFO,
@@ -328,7 +319,7 @@ def _wait_for_lock_to_disappear(handle, lock_file, lock_file_timeout_sec):
           # local download.
           logging.warning("Deleting lock file %s due to inactivity.",
                           lock_file)
-          tf_v1.gfile.Remove(lock_file)
+          tf.compat.v1.gfile.Remove(lock_file)
           break
         locked_tmp_dir_size = cur_locked_tmp_dir_size
         locked_tmp_dir_size_check_time = time.time()
@@ -370,6 +361,16 @@ def atomic_download(handle,
   lock_contents = _lock_file_contents(task_uid)
   tmp_dir = _temp_download_dir(module_dir, task_uid)
 
+  # Function to check whether model has already been downloaded.
+  check_module_exists = lambda: (
+      tf.compat.v1.gfile.Exists(module_dir) and tf.compat.v1.gfile.
+      ListDirectory(module_dir))
+
+  # Check whether the model has already been downloaded before locking
+  # the destination path.
+  if check_module_exists():
+    return module_dir
+
   # Attempt to protect against cases of processes being cancelled with
   # KeyboardInterrupt by using a try/finally clause to remove the lock
   # and tmp_dir.
@@ -380,12 +381,11 @@ def atomic_download(handle,
                                              overwrite=False)
         # Must test condition again, since another process could have created
         # the module and deleted the old lock file since last test.
-        if (tf_v1.gfile.Exists(module_dir) and 
-            tf_v1.gfile.ListDirectory(module_dir)):
+        if check_module_exists():
           # Lock file will be deleted in the finally-clause.
           return module_dir
-        if tf_v1.gfile.Exists(module_dir):
-          tf_v1.gfile.DeleteRecursively(module_dir)
+        if tf.compat.v1.gfile.Exists(module_dir):
+          tf.compat.v1.gfile.DeleteRecursively(module_dir)
         break  # Proceed to downloading the module.
       # These errors are believed to be permanent problems with the
       # module_dir that justify failing the download.
@@ -408,13 +408,13 @@ def atomic_download(handle,
       _wait_for_lock_to_disappear(handle, lock_file, lock_file_timeout_sec)
       # At this point we either deleted a lock or a lock got removed by the
       # owner or another process. Perform one more iteration of the while-loop,
-      # we would either terminate due tf_v1.gfile.Exists(module_dir) or because
-      # we would obtain a lock ourselves, or wait again for the lock to
+      # we would either terminate due tf.compat.v1.gfile.Exists(module_dir) or
+      # because we would obtain a lock ourselves, or wait again for the lock to
       # disappear.
 
     # Lock file acquired.
     logging.info("Downloading TF-Hub Module '%s'.", handle)
-    tf_v1.gfile.MakeDirs(tmp_dir)
+    tf.compat.v1.gfile.MakeDirs(tmp_dir)
     download_fn(handle, tmp_dir)
     # Write module descriptor to capture information about which module was
     # downloaded by whom and when. The file stored at the same level as a
@@ -427,7 +427,7 @@ def atomic_download(handle,
     # content.
     _write_module_descriptor_file(handle, module_dir)
     try:
-      tf_v1.gfile.Rename(tmp_dir, module_dir)
+      tf.compat.v1.gfile.Rename(tmp_dir, module_dir)
       logging.info("Downloaded TF-Hub Module '%s'.", handle)
     except tf.errors.AlreadyExistsError:
       logging.warning("Module already exists in %s", module_dir)
@@ -435,7 +435,7 @@ def atomic_download(handle,
   finally:
     try:
       # Temp directory is owned by the current process, remove it.
-      tf_v1.gfile.DeleteRecursively(tmp_dir)
+      tf.compat.v1.gfile.DeleteRecursively(tmp_dir)
     except tf.errors.NotFoundError:
       pass
     try:
@@ -445,15 +445,11 @@ def atomic_download(handle,
     if contents == lock_contents:
       # Lock file exists and is owned by this process.
       try:
-        tf_v1.gfile.Remove(lock_file)
+        tf.compat.v1.gfile.Remove(lock_file)
       except tf.errors.NotFoundError:
         pass
 
   return module_dir
-
-
-class UnsupportedHandleError(Exception):
-  """Exception class for incorrectly formatted handles."""
 
 
 class Resolver(object):
@@ -491,26 +487,41 @@ class PathResolver(Resolver):
   """Resolves handles which are absolute paths."""
 
   def is_supported(self, handle):
-    try:
-      return tf_v1.gfile.Exists(handle)
-    except tf.errors.OpError:
-      return False
-
-  def __call__(self, handle):
-    return handle
-
-
-class FailResolver(Resolver):
-  """Always fails to resolve a path."""
-
-  def is_supported(self, handle):
+    # Path resolver is the last Resolver in the chain so __call__ can always be
+    # called.
     return True
 
   def __call__(self, handle):
-    raise UnsupportedHandleError(
-        "unsupported handle format '%s'. No resolvers found that can "
-        "successfully resolve it. If the handle points to the local "
-        "filesystem, the error indicates that the module directory does not "
-        "exist. Supported handle formats: URLs pointing to a TGZ  file "
-        "(e.g. https://address/module.tgz), or Local File System directory "
-        "file (e.g. /tmp/my_local_module)." % handle)
+    if not tf.compat.v1.gfile.Exists(handle):
+      raise IOError("%s does not exist." % handle)
+    return handle
+
+
+class HttpResolverBase(Resolver):
+  """Base class for HTTP-based resolvers."""
+
+  def __init__(self):
+    self._context = None
+
+  def _append_format_query(self, handle, format_query):
+    """Append the given query args to the URL."""
+    # Convert the tuple from urlparse into list so it can be updated in place.
+    parsed = list(urllib.parse.urlparse(handle))
+    qsl = urllib.parse.parse_qsl(parsed[4])
+    qsl.append(format_query)
+    parsed[4] = urllib.parse.urlencode(qsl)
+    return urllib.parse.urlunparse(parsed)
+
+  def _set_url_context(self, context):
+    """Add an SSLContext to support custom certificate authorities."""
+    self._context = context
+
+  def _call_urlopen(self, request):
+    # Overriding this method allows setting SSL context in Python 3.
+    if self._context is None:
+      return urllib.request.urlopen(request)
+    else:
+      return urllib.request.urlopen(request, context=self._context)
+
+  def is_http_protocol(self, handle):
+    return handle.startswith(("http://", "https://"))

@@ -17,11 +17,8 @@
 This library provides the major pieces for make_image_classifier (see there).
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import collections
+import contextlib
 
 import tensorflow as tf
 import tensorflow_hub as hub
@@ -33,6 +30,20 @@ def get_default_image_dir():
   """Returns the path to a default image dataset, downloading it if needed."""
   return tf.keras.utils.get_file("flower_photos",
                                  _DEFAULT_IMAGE_URL, untar=True)
+
+
+class NoStrategy:
+  scope = contextlib.contextmanager(lambda _: iter(range(1)))
+
+
+def get_distribution_strategy(distribution_strategy_name):
+  if distribution_strategy_name == "mirrored":
+    return tf.distribute.MirroredStrategy()
+  elif not distribution_strategy_name:
+    return NoStrategy()
+  else:
+    raise ValueError(
+        "Unknown distribution strategy {}".format(distribution_strategy_name))
 
 
 class HParams(
@@ -73,7 +84,7 @@ def get_default_hparams():
       horizontal_flip=True,
       width_shift_range=0.2,
       height_shift_range=0.2,
-      shear_range=0.2,
+      shear_range=0,
       zoom_range=0.2)
 
 
@@ -88,8 +99,12 @@ def _get_data_with_keras(image_dir, image_size, batch_size, validation_split,
       the fixed height and width to which input images are resized.
     batch_size: A Python integer with the number of images per batch of
       training and validation data.
+    validation_split: A float representing the fraction of the dataset split
+      into a validation set.
     do_data_augmentation: An optional boolean, controlling whether the
       training dataset is augmented by randomly distorting input images.
+    augmentation_params: A dictionary containing the augmentation params as keys
+      and their respective values.
 
   Returns:
     A nested tuple ((train_data, train_size),
@@ -130,6 +145,96 @@ def _get_data_with_keras(image_dir, image_size, batch_size, validation_split,
   return ((train_generator, train_generator.samples),
           (valid_generator, valid_generator.samples),
           sorted_labels)
+
+
+def _get_data_as_datasets(image_dir, image_size, hparams):
+  """Gets training and validation data via tf.data.Dataset.
+
+  Args:
+    image_dir: A Python string with the name of a directory that contains
+      subdirectories of images, one per class.
+    image_size: A list or tuple with 2 Python integers specifying the fixed
+      height and width to which input images are resized.
+    hparams: A HParams object with hyperparameters controlling the training.
+
+  Returns:
+    A nested tuple ((train_data, train_size),
+                    (valid_data, valid_size), labels) where:
+    train_data, valid_data: tf.data.Dataset for use with Model.fit, each
+      yielding batch of tuples (images, labels) where
+        images is a float32 Tensor of shape [batch_size, height, width, 3]
+          with pixel values in range [0,1],
+        labels is a float32 Tensor of shape [batch_size, num_classes]
+          with one-hot encoded classes.
+    train_size, valid_size: Python integers with the numbers of training
+      and validation examples, respectively.
+    labels: A tuple of strings with the class labels (subdirectory names).
+      The index of a label in this tuple is the numeric class id.
+  """
+  # Check if hparam.shear_range is set. If yes, throw an error since shear is
+  # not supported when using preprocessing layers.
+  if hparams.shear_range != 0:
+    raise ValueError("Found non-zero value for shear_range. Shear is not "
+                     "supported when using reading input with tf.data.Dataset "
+                     "and using preprocessing layers.")
+
+  train_ds = tf.keras.preprocessing.image_dataset_from_directory(
+      image_dir,
+      validation_split=hparams.validation_split,
+      subset="training",
+      label_mode="categorical",
+      # Seed needs to provided when using validation_split and shuffle = True.
+      # A fixed seed is used so that the validation set is stable across runs.
+      seed=123,
+      image_size=image_size,
+      batch_size=1)
+  class_names = tuple(train_ds.class_names)
+  train_size = train_ds.cardinality().numpy()
+  train_ds = train_ds.unbatch().batch(hparams.batch_size)
+  train_ds = train_ds.repeat()
+
+  normalization_layer = tf.keras.layers.experimental.preprocessing.Rescaling(
+      1. / 255)
+  preprocessing_model = tf.keras.Sequential([normalization_layer])
+  if hparams.do_data_augmentation:
+    preprocessing_model.add(
+        tf.keras.layers.experimental.preprocessing.RandomRotation(
+            hparams.rotation_range))
+    preprocessing_model.add(
+        tf.keras.layers.experimental.preprocessing.RandomTranslation(
+            0, hparams.width_shift_range))
+    preprocessing_model.add(
+        tf.keras.layers.experimental.preprocessing.RandomTranslation(
+            hparams.height_shift_range, 0))
+    # Like the old tf.keras.preprocessing.image.ImageDataGenerator(),
+    # image sizes are fixed when reading, and then a random zoom is applied.
+    # If all training inputs are larger than image_size, one could also use
+    # RandomCrop with a batch size of 1 and rebatch later.
+    preprocessing_model.add(
+        tf.keras.layers.experimental.preprocessing.RandomZoom(
+            hparams.zoom_range, hparams.zoom_range))
+    if hparams.horizontal_flip:
+      preprocessing_model.add(
+          tf.keras.layers.experimental.preprocessing.RandomFlip(
+              mode="horizontal"))
+  train_ds = train_ds.map(lambda images, labels:
+                          (preprocessing_model(images), labels))
+
+  val_ds = tf.keras.preprocessing.image_dataset_from_directory(
+      image_dir,
+      validation_split=hparams.validation_split,
+      subset="validation",
+      label_mode="categorical",
+      seed=123,
+      shuffle=False,
+      image_size=image_size,
+      batch_size=1)
+  valid_size = val_ds.cardinality().numpy()
+  val_ds = val_ds.unbatch().batch(hparams.batch_size)
+  val_ds = val_ds.map(lambda images, labels:
+                      (normalization_layer(images), labels))
+
+  return ((train_ds, train_size), (val_ds, valid_size), class_names)
 
 
 def _image_size_for_module(module_layer, requested_image_size=None):
@@ -178,6 +283,7 @@ def _image_size_for_module(module_layer, requested_image_size=None):
 def build_model(module_layer, hparams, image_size, num_classes):
   """Builds the full classifier model from the given module_layer.
 
+  If using a DistributionStrategy, call this under its `.scope()`.
   Args:
     module_layer: Pre-trained tfhub model layer.
     hparams: A namedtuple of hyperparameters. This function expects
@@ -202,10 +308,14 @@ def build_model(module_layer, hparams, image_size, num_classes):
   return model
 
 
-def train_model(model, hparams, train_data_and_size, valid_data_and_size,
-                log_dir=None):
+def train_model(model,
+                 hparams,
+                 train_data_and_size,
+                 valid_data_and_size,
+                 log_dir=None):
   """Trains model with the given data and hyperparameters.
 
+  If using a DistributionStrategy, call this under its `.scope()`.
   Args:
     model: The tf.keras.Model from _build_model().
     hparams: A namedtuple of hyperparameters. This function expects
@@ -251,9 +361,13 @@ def train_model(model, hparams, train_data_and_size, valid_data_and_size,
       callbacks=callbacks)
 
 
-def make_image_classifier(tfhub_module, image_dir, hparams,
+def make_image_classifier(tfhub_module,
+                          image_dir,
+                          hparams,
+                          distribution_strategy=None,
                           requested_image_size=None,
-                          log_dir=None):
+                          log_dir=None,
+                          use_tf_data_input=False):
   """Builds and trains a TensorFLow model for image classification.
 
   Args:
@@ -261,17 +375,16 @@ def make_image_classifier(tfhub_module, image_dir, hparams,
     image_dir: A Python string naming a directory with subdirectories of images,
       one per class.
     hparams: A HParams object with hyperparameters controlling the training.
+    distribution_strategy: The DistributionStrategy make_image_classifier is
+      running with.
     requested_image_size: A Python integer controlling the size of images to
-      feed into the Hub module. If the module has a fixed input size, this
-      must be omitted or set to that same value.
+      feed into the Hub module. If the module has a fixed input size, this must
+      be omitted or set to that same value.
     log_dir: A directory to write logs for TensorBoard into (defaults to None,
       no logs will then be written).
+    use_tf_data_input: Whether to read input with a tf.data.Dataset and use TF
+      ops for preprocessing.
   """
-  module_layer = hub.KerasLayer(tfhub_module,
-                                trainable=hparams.do_fine_tuning)
-  image_size = _image_size_for_module(module_layer, requested_image_size)
-  print("Using module {} with image size {}".format(
-      tfhub_module, image_size))
   augmentation_params = dict(
       rotation_range=hparams.rotation_range,
       horizontal_flip=hparams.horizontal_flip,
@@ -279,12 +392,21 @@ def make_image_classifier(tfhub_module, image_dir, hparams,
       height_shift_range=hparams.height_shift_range,
       shear_range=hparams.shear_range,
       zoom_range=hparams.zoom_range)
-  train_data_and_size, valid_data_and_size, labels = _get_data_with_keras(
-      image_dir, image_size, hparams.batch_size, hparams.validation_split,
-      hparams.do_data_augmentation, augmentation_params)
-  print("Found", len(labels), "classes:", ", ".join(labels))
 
-  model = build_model(module_layer, hparams, image_size, len(labels))
-  train_result = train_model(model, hparams, train_data_and_size,
-                             valid_data_and_size, log_dir)
+  with distribution_strategy.scope():
+    module_layer = hub.KerasLayer(
+        tfhub_module, trainable=hparams.do_fine_tuning)
+    image_size = _image_size_for_module(module_layer, requested_image_size)
+    print("Using module {} with image size {}".format(tfhub_module, image_size))
+    if use_tf_data_input:
+      train_data_and_size, valid_data_and_size, labels = _get_data_as_datasets(
+          image_dir, image_size, hparams)
+    else:
+      train_data_and_size, valid_data_and_size, labels = _get_data_with_keras(
+          image_dir, image_size, hparams.batch_size, hparams.validation_split,
+          hparams.do_data_augmentation, augmentation_params)
+    print("Found", len(labels), "classes:", ", ".join(labels))
+    model = build_model(module_layer, hparams, image_size, len(labels))
+    train_result = train_model(model, hparams, train_data_and_size,
+                                valid_data_and_size, log_dir)
   return model, labels, train_result

@@ -13,9 +13,6 @@
 # limitations under the License.
 # ==============================================================================
 """Setup for pip package."""
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
 
 from datetime import datetime
 from setuptools import find_packages
@@ -30,7 +27,6 @@ with open('tensorflow_hub/version.py') as in_file:
 
 REQUIRED_PACKAGES = [
     'numpy >= 1.12.0',
-    'six >= 1.12.0',
     'protobuf >= 3.8.0',  # No less than what ../WORKSPACE uses.
 ]
 
@@ -83,12 +79,12 @@ setup(
         'Intended Audience :: Education',
         'Intended Audience :: Science/Research',
         'License :: OSI Approved :: Apache Software License',
-        'Programming Language :: Python :: 2',
-        'Programming Language :: Python :: 2.7',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.4',
         'Programming Language :: Python :: 3.5',
         'Programming Language :: Python :: 3.6',
+        'Programming Language :: Python :: 3.7',
+        'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3 :: Only',
         'Topic :: Scientific/Engineering',
         'Topic :: Scientific/Engineering :: Mathematics',
         'Topic :: Scientific/Engineering :: Artificial Intelligence',

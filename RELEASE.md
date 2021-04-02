@@ -12,11 +12,33 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================-->
+# Current version 0.12.0-dev
+  * Changes to make_image_classifier_tool:
+    * Add the option to read input with a tf.data.Dataset and use TF ops for 
+      preprocessing. Enabling this feature is
+    * Set the default value of shear_range to 0. shear_range is deprecated and
+      incompatible when using TF ops for preprocessing.
 
-# Current version 0.9.0-dev
-  * Under development
+# Release 0.11.0
+  * Use the Keras load context in keras_layer.py.
+  * Always use compressed model loading by default.
+  * Documentation improvements.
 
-# Current version 0.8.0
+# Release 0.10.0
+  * Enforce Python 3.5+ and TF1.15+.
+  * Add ModelLoadFormat setting to switch between (un)compressed model loading.
+  * Support for RaggedTensor inputs/outputs is backported from TF2 SavedModels
+     to the deprecated hub.Module class (Use of tf.compat.v1.ragged.placeholder()
+     in a module_fn is broken for TF2.3 and requires TF2.2 or TF2.4).
+  * Bug fixes.
+
+# Release 0.9.0
+  * Add SavedModel.LoadOptions to hub.KerasLayer API to pass to load_v2.
+  * Improved error messaging.
+  * Documentation improvements.
+  * Bug fixes.
+
+# Release 0.8.0
   * Implemented make_nearest_neighbour_index tool.
   * Added text FeatureColumn, hub.text_embedding_column_v2, for TF 2.x.
   * CORD-19 embedding colab.

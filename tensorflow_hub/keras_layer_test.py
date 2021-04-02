@@ -14,10 +14,6 @@
 # ==============================================================================
 """Tests for tensorflow_hub.keras_layer."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import json
 import os
 
@@ -83,9 +79,10 @@ def _save_half_plus_one_model(export_dir, save_from_keras=False):
 
 
 def _save_half_plus_one_hub_module_v1(path):
-  """Writes TF1.x hub.Module to compute y = wx + 1, with w trainable."""
+  """Writes a model in TF1 Hub format to compute y = wx + 1, with w trainable."""
+
   def half_plus_one():
-    x = tf.compat.v1.placeholder(shape=(None,1), dtype=tf.float32)
+    x = tf.compat.v1.placeholder(shape=(None, 1), dtype=tf.float32)
     # Use TF1 native tf.compat.v1.layers instead of tf.keras.layers as they
     # correctly update TF collections, such as REGULARIZATION_LOSS.
     times_w = tf.compat.v1.layers.Dense(
@@ -262,7 +259,7 @@ def _save_plus_one_saved_model_v2(path, save_from_keras=False):
 
 
 def _save_plus_one_hub_module_v1(path):
-  """Writes TF1.x hub.Module that increments the input by one."""
+  """Writes a model in TF1 Hub format that increments the input by one."""
 
   def plus_one():
     x = tf.compat.v1.placeholder(dtype=tf.float32, name="x")

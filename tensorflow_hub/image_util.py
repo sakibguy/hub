@@ -14,16 +14,12 @@
 # ==============================================================================
 """Helper functions for TF-Hub modules that handle images."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 from tensorflow_hub import image_module_info_pb2
 from tensorflow_hub import native_module
 
 
-# hub.Modules for images can provide further information for the utilities
-# in this file by attaching an ImageModuleInfo message under this key.
+# Models in TF1 Hub format for images can provide further information for the
+# utilities in this file by attaching an ImageModuleInfo message under this key.
 IMAGE_MODULE_INFO_KEY = "image_module_info"
 
 
@@ -34,7 +30,9 @@ ImageModuleInfo = image_module_info_pb2.ImageModuleInfo  # pylint: disable=inval
 def attach_image_module_info(image_module_info):
   """Attaches an ImageModuleInfo message from within a module_fn.
 
-  DEPRECATION NOTE: This belongs to the hub.Module API and file format for TF1.
+  Warning: Deprecated. This belongs to the hub.Module API and TF1 Hub format.
+
+  THIS FUNCTION IS DEPRECATED.
 
   Args:
     image_module_info: an ImageModuleInfo message.
@@ -45,7 +43,9 @@ def attach_image_module_info(image_module_info):
 def get_image_module_info(module_or_spec, required=False):
   """Returns the module's attached ImageModuleInfo message, or None if missing.
 
-  DEPRECATION NOTE: This belongs to the hub.Module API and file format for TF1.
+  Warning: Deprecated. This belongs to the hub.Module API and TF1 Hub format
+
+  THIS FUNCTION IS DEPRECATED.
 
   Args:
     module_or_spec: a hub.Module or module_spec object.

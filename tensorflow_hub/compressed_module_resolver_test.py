@@ -14,22 +14,12 @@
 # ==============================================================================
 """Tests for tensorflow_hub.compressed_module_resolver."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
-# pylint:disable=g-import-not-at-top,g-statement-before-imports
-try:
-  import mock as mock
-except ImportError:
-  import unittest.mock as mock
-# pylint:disable=g-import-not-at-top,g-statement-before-imports
-
 import os
 import re
 import socket
 import tarfile
 import tempfile
+import unittest
 import uuid
 
 from absl import flags
@@ -39,7 +29,6 @@ from tensorflow_hub import compressed_module_resolver
 from tensorflow_hub import resolver
 from tensorflow_hub import test_utils
 from tensorflow_hub import tf_utils
-from tensorflow_hub import tf_v1
 
 
 FLAGS = flags.FLAGS
@@ -55,11 +44,11 @@ class HttpCompressedFileResolverTest(tf.test.TestCase):
     # Create three temp files.
     self.files = ["file1", "file2", "file3"]
     for cur_file in self.files:
-      with tf_v1.gfile.GFile(cur_file, mode="w") as f:
+      with tf.compat.v1.gfile.GFile(cur_file, mode="w") as f:
         f.write(cur_file)
 
     # Write a dummy file so download server doesn't return 404.
-    with tf_v1.gfile.GFile("mock_module", mode="w") as f:
+    with tf.compat.v1.gfile.GFile("mock_module", mode="w") as f:
       f.write("module")
 
     # Create TAR files.
@@ -153,9 +142,10 @@ class HttpCompressedFileResolverTest(tf.test.TestCase):
         ("https://example.com/module?extra=abc&"
          "tf-hub-format=test&tf-hub-format=compressed"),
     )]
+    http_resolver = compressed_module_resolver.HttpCompressedFileResolver()
     for handle, expected in tests:
       self.assertTrue(
-          compressed_module_resolver._append_compressed_format_query(handle),
+          http_resolver._append_compressed_format_query(handle),
           expected)
 
   def testAbandondedLockFile(self):
@@ -171,7 +161,7 @@ class HttpCompressedFileResolverTest(tf.test.TestCase):
     tf_utils.atomic_write_string_to_file(lock_filename,
                                          resolver._lock_file_contents(task_uid),
                                          overwrite=False)
-    with mock.patch.object(
+    with unittest.mock.patch.object(
         compressed_module_resolver.HttpCompressedFileResolver,
         "_lock_file_timeout_sec",
         return_value=10):
@@ -182,7 +172,7 @@ class HttpCompressedFileResolverTest(tf.test.TestCase):
       path = http_resolver(handle)
     files = os.listdir(path)
     self.assertListEqual(sorted(files), ["file1", "file2", "file3"])
-    self.assertFalse(tf_v1.gfile.Exists(lock_filename))
+    self.assertFalse(tf.compat.v1.gfile.Exists(lock_filename))
 
   def testModuleAlreadyDownloaded(self):
     FLAGS.tfhub_cache_dir = os.path.join(self.get_temp_dir(), "cache_dir")
@@ -191,7 +181,7 @@ class HttpCompressedFileResolverTest(tf.test.TestCase):
     files = sorted(os.listdir(path))
     self.assertListEqual(files, ["file1", "file2", "file3"])
     creation_times = [
-        tf_v1.gfile.Stat(os.path.join(path, f)).mtime_nsec for f in files
+        tf.compat.v1.gfile.Stat(os.path.join(path, f)).mtime_nsec for f in files
     ]
     # Call resolver again and make sure that the module is not downloaded again
     # by checking the timestamps of the module files.
@@ -200,10 +190,10 @@ class HttpCompressedFileResolverTest(tf.test.TestCase):
     self.assertListEqual(files, ["file1", "file2", "file3"])
     self.assertListEqual(
         creation_times,
-        [tf_v1.gfile.Stat(os.path.join(path, f)).mtime_nsec for f in files])
+        [tf.compat.v1.gfile.Stat(os.path.join(path, f)).mtime_nsec for f in files])
 
   def testCorruptedArchive(self):
-    with tf_v1.gfile.GFile("bad_archive.tar.gz", mode="w") as f:
+    with tf.compat.v1.gfile.GFile("bad_archive.tar.gz", mode="w") as f:
       f.write("bad_archive")
     http_resolver = compressed_module_resolver.HttpCompressedFileResolver()
     try:

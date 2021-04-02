@@ -14,26 +14,11 @@
 # ==============================================================================
 """Functions to resolve TF-Hub Module stored in compressed TGZ format."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import hashlib
-# pylint:disable=g-import-not-at-top
-# pylint:disable=g-importing-member
-try:
-  import urllib.request as url
-  import urllib.parse as urlparse
-  from urllib.parse import urlencode
-except ImportError:
-  import urllib2 as url
-  from urllib import urlencode
-  import urlparse
-# pylint:disable=g-import-not-at-top
-# pylint:enable=g-importing-member
+import urllib
 
+import tensorflow as tf
 from tensorflow_hub import resolver
-from tensorflow_hub import tf_v1
 
 
 LOCK_FILE_TIMEOUT_SEC = 10 * 60  # 10 minutes
@@ -51,35 +36,30 @@ def _module_dir(handle):
 
 def _is_tarfile(filename):
   """Returns true if 'filename' is TAR file."""
-  return (filename.endswith(".tar") or filename.endswith(".tar.gz") or
-          filename.endswith(".tgz"))
+  return filename.endswith((".tar", ".tar.gz", ".tgz"))
 
 
-def _append_compressed_format_query(handle):
-  # Convert the tuple from urlparse into list so it can be updated in place.
-  parsed = list(urlparse.urlparse(handle))
-  qsl = urlparse.parse_qsl(parsed[4])
-  qsl.append(_COMPRESSED_FORMAT_QUERY)
-  # NOTE: Cast to string to avoid urlunparse to deal with mixed types.
-  # This happens due to backport of urllib.parse into python2 returning an
-  # instance of <class 'future.types.newstr.newstr'>.
-  parsed[4] = str(urlencode(qsl))
-  return urlparse.urlunparse(parsed)
-
-
-class HttpCompressedFileResolver(resolver.Resolver):
+class HttpCompressedFileResolver(resolver.HttpResolverBase):
   """Resolves HTTP handles by downloading and decompressing them to local fs."""
 
   def is_supported(self, handle):
     # HTTP(S) handles are assumed to point to tarfiles.
-    return handle.startswith("http://") or handle.startswith("https://")
+    if not self.is_http_protocol(handle):
+      return False
+    # AUTO defaults to COMPRESSED
+    load_format = resolver.model_load_format()
+    return load_format in [
+        resolver.ModelLoadFormat.COMPRESSED.value,
+        resolver.ModelLoadFormat.AUTO.value
+    ]
 
   def __call__(self, handle):
     module_dir = _module_dir(handle)
 
     def download(handle, tmp_dir):
       """Fetch a module via HTTP(S), handling redirect and download headers."""
-      request = url.Request(_append_compressed_format_query(handle))
+      request = urllib.request.Request(
+          self._append_compressed_format_query(handle))
       response = self._call_urlopen(request)
       return resolver.DownloadManager(handle).download_and_uncompress(
           response, tmp_dir)
@@ -91,9 +71,8 @@ class HttpCompressedFileResolver(resolver.Resolver):
     # This method is provided as a convenience to simplify testing.
     return LOCK_FILE_TIMEOUT_SEC
 
-  def _call_urlopen(self, request):
-    # Overriding this method allows setting SSL context in Python 3.
-    return url.urlopen(request)
+  def _append_compressed_format_query(self, handle):
+    return self._append_format_query(handle, _COMPRESSED_FORMAT_QUERY)
 
 
 class GcsCompressedFileResolver(resolver.Resolver):
@@ -107,7 +86,7 @@ class GcsCompressedFileResolver(resolver.Resolver):
 
     def download(handle, tmp_dir):
       return resolver.DownloadManager(handle).download_and_uncompress(
-          tf_v1.gfile.GFile(handle, "rb"), tmp_dir)
+          tf.compat.v1.gfile.GFile(handle, "rb"), tmp_dir)
 
     return resolver.atomic_download(handle, download, module_dir,
                                     LOCK_FILE_TIMEOUT_SEC)

@@ -14,10 +14,6 @@
 # ==============================================================================
 r"""Tests for MNIST exporter."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import logging
 import os
 
@@ -31,7 +27,7 @@ class ExportTest(tf.test.TestCase):
   """Test for MNIST model exporter."""
 
   def setUp(self):
-    super(ExportTest, self).setUp()
+    super().setUp()
     def create_image_and_label(index):
       image = tf.image.convert_image_dtype(
           255 * tf.random.normal([1, 28, 28, 1]), dtype=tf.uint8, saturate=True)

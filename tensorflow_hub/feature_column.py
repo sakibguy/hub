@@ -14,18 +14,11 @@
 # ==============================================================================
 """Utilities to use Modules as feature columns."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import collections
 
-import six
 import tensorflow as tf
 from tensorflow_hub import image_util
 from tensorflow_hub import module
-from tensorflow_hub import tf_utils
-from tensorflow_hub import tf_v1
 
 # TODO(b/73987364): It is not possible to extend feature columns without
 # depending on TensorFlow internal implementation details.
@@ -35,22 +28,13 @@ from tensorflow.python.feature_column import feature_column_v2
 # pylint: enable=g-direct-tensorflow-import
 
 
-if tf_utils.fc2_implements_resources():
+class DenseFeatureColumn(
+    feature_column._DenseColumn,  # pylint: disable=protected-access
+    feature_column_v2.DenseColumn):
 
-  # Use feature columns v2 if available.
-  class DenseFeatureColumn(
-      feature_column._DenseColumn,  # pylint: disable=protected-access
-      feature_column_v2.DenseColumn):
-
-    @property
-    def dtype(self):
-      return tf.float32
-else:
-  class DenseFeatureColumn(feature_column._DenseColumn):  # pylint: disable=protected-access
-
-    @property
-    def dtype(self):
-      return tf.float32
+  @property
+  def dtype(self):
+    return tf.float32
 
 
 _MODULE_RESOURCE_STRING = "module"
@@ -155,11 +139,11 @@ class _TextEmbeddingColumn(
   def __init__(self, key, module_spec_path, trainable):
     self.module_spec = module.as_module_spec(self.module_spec_path)
     _check_module_is_text_embedding(self.module_spec)
-    super(_TextEmbeddingColumn, self).__init__()
+    super().__init__()
 
   @property
   def _is_v2_column(self):
-    return tf_utils.fc2_implements_resources()
+    return True
 
   @property
   def parents(self):
@@ -170,8 +154,7 @@ class _TextEmbeddingColumn(
   def name(self):
     """Returns string. Used for variable_scope and naming."""
     if not hasattr(self, "_name"):
-      key_name = self.key if isinstance(self.key,
-                                        six.string_types) else self.key.name
+      key_name = self.key if isinstance(self.key, str) else self.key.name
       self._name = "{}_hub_module_embedding".format(key_name)
     return self._name
 
@@ -199,7 +182,7 @@ class _TextEmbeddingColumn(
   @property
   def parse_example_spec(self):
     """Returns a `tf.Example` parsing spec as dict."""
-    return {self.key: tf_v1.FixedLenFeature([1], tf.string)}
+    return {self.key: tf.compat.v1.FixedLenFeature([1], tf.string)}
 
   @property
   def _variable_shape(self):
@@ -230,7 +213,7 @@ class _TextEmbeddingColumn(
     return self._get_dense_tensor_for_input_tensor(input_tensor, text_module)
 
   def get_config(self):
-    if not isinstance(self.module_spec_path, six.string_types):
+    if not isinstance(self.module_spec_path, str):
       raise NotImplementedError(
           "Can only generate a valid config for `hub.text_embedding_column`"
           "that uses a string `module_spec`.\n\n"
@@ -244,7 +227,7 @@ class _TextEmbeddingColumn(
     return cls(**copied_config)
 
 
-def image_embedding_column(key, module_spec):
+def image_embedding_column(key, module_spec, image_size=None):
   """Uses a Module to get a dense 1-D representation from the pixels of images.
 
   TODO(b/131678043): This does not work yet with TF2.
@@ -276,6 +259,10 @@ def image_embedding_column(key, module_spec):
   Args:
     key: A string or `_FeatureColumn` identifying the input image data.
     module_spec: A string handle or a `ModuleSpec` identifying the module.
+    image_size: Optional. If specified it should be a tuple of image height and
+        width to use with the module. Note that it depends on the module on
+        whether the default size can be overridden and what the permissible
+        values are.
 
   Returns:
     `_DenseColumn` that converts from pixel data.
@@ -283,14 +270,22 @@ def image_embedding_column(key, module_spec):
   Raises:
      ValueError: if module_spec is not suitable for use in this feature column.
   """
-  return _ImageEmbeddingColumn(key=key, module_spec_path=module_spec)
+  # Configuration stored in a feature column should be hashable or user can
+  # get a TypeError when using it with DenseFeatures. If a user passes a list
+  # cast it to a tuple to avoid wasted debugging time.
+  if isinstance(image_size, list):
+    image_size = tuple(image_size)
+  return _ImageEmbeddingColumn(key=key, module_spec_path=module_spec,
+                               image_size=image_size)
 
 
-def _check_module_is_image_embedding(module_spec):
+def _check_module_is_image_embedding(module_spec, check_image_size):
   """Raises ValueError if `module_spec` is not usable as image embedding.
 
   Args:
     module_spec: A `_ModuleSpec` to test.
+    check_image_size: Whether to check for compatibility with
+        get_expected_image_size.
 
   Raises:
     ValueError: if `module_spec` default signature is not compatible with
@@ -308,7 +303,8 @@ def _check_module_is_image_embedding(module_spec):
                   "which must have type float32 and name 'images'.")
   else:
     try:
-      image_util.get_expected_image_size(module_spec)
+      if check_image_size:
+        image_util.get_expected_image_size(module_spec)
     except ValueError as e:
       issues.append("Module does not support hub.get_expected_image_size(); "
                     "original error was:\n" + str(e))  # Raised again below.
@@ -332,18 +328,20 @@ def _check_module_is_image_embedding(module_spec):
 
 class _ImageEmbeddingColumn(DenseFeatureColumn,
                             collections.namedtuple("_ImageEmbeddingColumn",
-                                                   ("key", "module_spec_path"))
+                                                   ("key", "module_spec_path",
+                                                    "image_size"))
                            ):
   """Returned by image_embedding_column(). Do not use directly."""
 
-  def __init__(self, key, module_spec_path):
+  def __init__(self, key, module_spec_path, image_size):
     self.module_spec = module.as_module_spec(self.module_spec_path)
-    _check_module_is_image_embedding(self.module_spec)
-    super(_ImageEmbeddingColumn, self).__init__()
+    _check_module_is_image_embedding(self.module_spec,
+                                     check_image_size=self.image_size is None)
+    super().__init__()
 
   @property
   def _is_v2_column(self):
-    return tf_utils.fc2_implements_resources()
+    return True
 
   @property
   def parents(self):
@@ -354,8 +352,7 @@ class _ImageEmbeddingColumn(DenseFeatureColumn,
   def name(self):
     """Returns string. Used for variable_scope and naming."""
     if not hasattr(self, "_name"):
-      key_name = self.key if isinstance(self.key,
-                                        six.string_types) else self.key.name
+      key_name = self.key if isinstance(self.key, str) else self.key.name
       self._name = "{}_hub_module_embedding".format(key_name)
     return self._name
 
@@ -380,9 +377,12 @@ class _ImageEmbeddingColumn(DenseFeatureColumn,
   @property
   def parse_example_spec(self):
     """Returns a `tf.Example` parsing spec as dict."""
-    height, width = image_util.get_expected_image_size(self.module_spec)
+    if self.image_size:
+      height, width = self.image_size
+    else:
+      height, width = image_util.get_expected_image_size(self.module_spec)
     input_shape = [height, width, 3]
-    return {self.key: tf_v1.FixedLenFeature(input_shape, tf.float32)}
+    return {self.key: tf.compat.v1.FixedLenFeature(input_shape, tf.float32)}
 
   @property
   def _variable_shape(self):
@@ -409,7 +409,7 @@ class _ImageEmbeddingColumn(DenseFeatureColumn,
     return self._get_dense_tensor_for_images(images, image_module)
 
   def get_config(self):
-    if not isinstance(self.module_spec_path, six.string_types):
+    if not isinstance(self.module_spec_path, str):
       raise NotImplementedError(
           "Can only generate a valid config for `hub.image_embedding_column`"
           "that uses a string `module_spec`.\n\n"
@@ -512,8 +512,7 @@ class _SparseTextEmbeddingColumn(
   def name(self):
     """Returns string. Used for variable_scope and naming."""
     if not hasattr(self, "_name"):
-      key_name = self.key if isinstance(self.key,
-                                        six.string_types) else self.key.name
+      key_name = self.key if isinstance(self.key, str) else self.key.name
       self._name = "{}_hub_module_embedding".format(key_name)
     return self._name
 
@@ -532,7 +531,7 @@ class _SparseTextEmbeddingColumn(
   @property
   def parse_example_spec(self):
     """Returns a `tf.Example` parsing spec as dict."""
-    return {self.key: tf_v1.VarLenFeature(tf.string)}
+    return {self.key: tf.compat.v1.VarLenFeature(tf.string)}
 
   @property
   def _variable_shape(self):

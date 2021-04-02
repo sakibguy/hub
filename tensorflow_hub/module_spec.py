@@ -14,17 +14,13 @@
 # ==============================================================================
 """The ModuleSpec interface, for the deprecated hub.Module class."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import abc
 
 
 class ModuleSpec(object):
   """Represents the contents of a hub.Module before it has been instantiated.
 
-  DEPRECATION NOTE: This belongs to the hub.Module API and file format for TF1.
+  Warning: Deprecated. This belongs to the hub.Module API and TF1 Hub format.
   For TF2, switch to plain SavedModels and hub.load().
 
   A ModuleSpec is the blueprint used by `Module` to create one or more instances
@@ -34,6 +30,8 @@ class ModuleSpec(object):
 
   Note: Do not instantiate this class directly. Use `hub.load_module_spec` or
   `hub.create_module_spec`.
+
+  THIS FUNCTION IS DEPRECATED.
   """
   __metaclass__ = abc.ABCMeta
 
@@ -100,9 +98,10 @@ class ModuleSpec(object):
 
     Returns:
       A dict from input names to objects that provide (1) a property `dtype`,
-      (2) a method `get_shape()` and (3) a read-only boolean property
-      `is_sparse`. The first two are compatible with the common API of Tensor
-      and SparseTensor objects.
+      (2) a method `get_shape()`, (3) a read-only boolean property `is_sparse`,
+      (4) a read-only boolean property `is_composite`; and (5) a read-only
+      property `type_spec`. The first two are compatible with the common API of
+      Tensor, SparseTensor, and RaggedTensor objects.
 
     Raises:
       KeyError: if there is no such signature or graph variant.
@@ -118,11 +117,11 @@ class ModuleSpec(object):
         If None, the default signature is used if defined.
       tags: Optional set of strings, specifying the graph variant to query.
 
-    Returns:
-      A dict from input names to objects that provide (1) a property `dtype`,
-      (2) a method `get_shape()` and (3) a read-only boolean property
-      `is_sparse`. The first two are compatible with the common API of Tensor
-      and SparseTensor objects.
+    Returns: A dict from input names to objects that provide (1) a property
+      `dtype`, (2) a method `get_shape()`,(3) a read-only boolean property
+      `is_sparse`, (4) a read-only boolean property `is_composite`; and (5) a
+      read-only property `type_spec`. The first two are compatible with the
+      common API of Tensor, SparseTensor, and RaggedTensor objects.
 
     Raises:
       KeyError: if there is no such signature or graph variant.

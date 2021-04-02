@@ -14,31 +14,27 @@
 # ==============================================================================
 """Tests for tensorflow_hub.resolver."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
-# pylint:disable=g-import-not-at-top,g-statement-before-imports
-try:
-  import mock as mock
-except ImportError:
-  import unittest.mock as mock
-# pylint:disable=g-import-not-at-top,g-statement-before-imports
-
 import os
 import re
 import socket
 import tempfile
 import threading
 import time
+import unittest
 import uuid
 
 from absl import flags
+import mock
 import tensorflow as tf
+import tensorflow_hub as hub
 
+from tensorflow_hub import compressed_module_resolver
+from tensorflow_hub import config
+from tensorflow_hub import registry
 from tensorflow_hub import resolver
+from tensorflow_hub import test_utils
 from tensorflow_hub import tf_utils
-from tensorflow_hub import tf_v1
+from tensorflow_hub import uncompressed_module_resolver
 
 
 FLAGS = flags.FLAGS
@@ -47,25 +43,29 @@ FLAGS = flags.FLAGS
 class PathResolverTest(tf.test.TestCase):
 
   def setUp(self):
-    super(PathResolverTest, self).setUp()
+    super().setUp()
     self.resolver = resolver.PathResolver()
 
-  def testHandleSupported(self):
+  def testAlwaysSupported(self):
     os.chdir(os.path.join(self.get_temp_dir()))
     self.assertTrue(self.resolver.is_supported("/tmp"))
-    tf_v1.gfile.MkDir("foo/")
+    tf.compat.v1.gfile.MkDir("foo/")
     self.assertTrue(self.resolver.is_supported("./foo/"))
     self.assertTrue(self.resolver.is_supported("foo/"))
     # Directory doesn't exist.
-    self.assertFalse(self.resolver.is_supported("bar/"))
-    self.assertFalse(self.resolver.is_supported("foo/bar"))
-    self.assertFalse(self.resolver.is_supported("nope://throw-OpError"))
+    self.assertTrue(self.resolver.is_supported("bar/"))
+    self.assertTrue(self.resolver.is_supported("foo/bar"))
+    self.assertTrue(self.resolver.is_supported("nope://throw-OpError"))
 
-  def testGetModulePath(self):
+  def testCallWithValidHandle(self):
     tmp_path = os.path.join(self.get_temp_dir(), "1234")
-    tf_v1.gfile.MkDir(tmp_path)
+    tf.compat.v1.gfile.MkDir(tmp_path)
     path = self.resolver(tmp_path)
     self.assertEqual(path, tmp_path)
+
+  def testCallWhenHandleDirectoryDoesNotExist(self):
+    with self.assertRaisesRegex(IOError, "/foo/ does not exist."):
+      self.resolver("/foo/")
 
 
 class FakeResolver(resolver.Resolver):
@@ -83,7 +83,7 @@ class FakeResolver(resolver.Resolver):
     return handle + "-resolved_by_" + self.prefix
 
 
-class ResolverTest(tf.test.TestCase):
+class CompressedResolverTest(tf.test.TestCase):
 
   def testCacheDir(self):
     # No cache dir set, None is returned.
@@ -116,13 +116,13 @@ class ResolverTest(tf.test.TestCase):
 
     # Create a directory with some files and sub-directory and check its size.
     test_dir = resolver._temp_download_dir(self.get_temp_dir(), fake_task_uid)
-    tf_v1.gfile.MakeDirs(test_dir)
+    tf.compat.v1.gfile.MakeDirs(test_dir)
     tf_utils.atomic_write_string_to_file(
         os.path.join(test_dir, "file1"), "content1", False)
     tf_utils.atomic_write_string_to_file(
         os.path.join(test_dir, "file2"), "content2", False)
     test_sub_dir = os.path.join(test_dir, "sub_dir")
-    tf_v1.gfile.MakeDirs(test_sub_dir)
+    tf.compat.v1.gfile.MakeDirs(test_sub_dir)
     tf_utils.atomic_write_string_to_file(
         os.path.join(test_sub_dir, "file3"), "content3", False)
     self.assertEqual(3 * 8, resolver._dir_size(test_dir))
@@ -136,7 +136,7 @@ class ResolverTest(tf.test.TestCase):
     self.assertEqual(3 * 8, resolver._locked_tmp_dir_size(fake_lock_filename))
 
     # Check that if temp directory doesn't exist, 0 is returned.
-    tf_v1.gfile.DeleteRecursively(test_dir)
+    tf.compat.v1.gfile.DeleteRecursively(test_dir)
     self.assertEqual(0, resolver._locked_tmp_dir_size(fake_lock_filename))
 
   def testLockFileName(self):
@@ -167,7 +167,7 @@ class ResolverTest(tf.test.TestCase):
                               args=("module", lock_filename, 600,))
     thread.start()
     # Delete the lock file.
-    tf_v1.gfile.Remove(lock_filename)
+    tf.compat.v1.gfile.Remove(lock_filename)
     thread.join(10)
     # The waiting terminates without errors.
 
@@ -191,7 +191,7 @@ class ResolverTest(tf.test.TestCase):
     # Simulate download by writing a file every 1 sec. While writes are happing
     # the lock file remains in place.
     tmp_dir = resolver._temp_download_dir(self.get_temp_dir(), task_uid)
-    tf_v1.gfile.MakeDirs(tmp_dir)
+    tf.compat.v1.gfile.MakeDirs(tmp_dir)
     for x in range(2 * lock_expiration_wait_time_secs):
       tf_utils.atomic_write_string_to_file(
           os.path.join(tmp_dir, "file_%d" % x), "test", overwrite=False)
@@ -210,7 +210,7 @@ class ResolverTest(tf.test.TestCase):
     tf_utils.atomic_write_string_to_file(
         lock_filename, lock_file_content, overwrite=False)
     tmp_dir = resolver._temp_download_dir(self.get_temp_dir(), task_uid)
-    tf_v1.gfile.MakeDirs(tmp_dir)
+    tf.compat.v1.gfile.MakeDirs(tmp_dir)
 
     thread = threading.Thread(target=resolver._wait_for_lock_to_disappear,
                               args=("module", lock_filename, 10,))
@@ -218,7 +218,7 @@ class ResolverTest(tf.test.TestCase):
     thread.join(30)
     # Because nobody was writing to tmp_dir, the lock file got reclaimed by
     # resolver._wait_for_lock_to_disappear.
-    self.assertFalse(tf_v1.gfile.Exists(lock_filename))
+    self.assertFalse(tf.compat.v1.gfile.Exists(lock_filename))
 
   def testModuleAlreadyDownloaded(self):
     # Simulate the case when a rogue process finishes downloading a module
@@ -228,7 +228,7 @@ class ResolverTest(tf.test.TestCase):
     def fake_download_fn_with_rogue_behavior(handle, tmp_dir):
       del handle, tmp_dir
       # Create module directory
-      tf_v1.gfile.MakeDirs(module_dir)
+      tf.compat.v1.gfile.MakeDirs(module_dir)
       tf_utils.atomic_write_string_to_file(
           os.path.join(module_dir, "file"), "content", False)
 
@@ -236,11 +236,12 @@ class ResolverTest(tf.test.TestCase):
         module_dir,
         resolver.atomic_download("module", fake_download_fn_with_rogue_behavior,
                                  module_dir))
-    self.assertEqual(tf_v1.gfile.ListDirectory(module_dir), ["file"])
-    self.assertFalse(tf_v1.gfile.Exists(resolver._lock_filename(module_dir)))
+    self.assertEqual(tf.compat.v1.gfile.ListDirectory(module_dir), ["file"])
+    self.assertFalse(tf.compat.v1.gfile.Exists(
+        resolver._lock_filename(module_dir)))
     parent_dir = os.path.abspath(os.path.join(module_dir, ".."))
     self.assertEqual(
-        sorted(tf_v1.gfile.ListDirectory(parent_dir)),
+        sorted(tf.compat.v1.gfile.ListDirectory(parent_dir)),
         ["module", "module.descriptor.txt"])
     self.assertRegexpMatches(
         tf_utils.read_file_to_string(
@@ -250,6 +251,21 @@ class ResolverTest(tf.test.TestCase):
         "Downloader Hostname: %s .PID:%d." % (re.escape(socket.gethostname()),
                                               os.getpid()))
 
+    # Try downloading the model again. Mock
+    # tf_utils.atomic_write_string_to_file() to throw an exception. Since the
+    # model is already downloaded, the function will never get called and the
+    # download succeeds.
+    with mock.patch.object(
+        tf_utils, "atomic_write_string_to_file",
+        side_effect=ValueError("This error should never be raised!")):
+      self.assertEqual(
+          module_dir,
+          resolver.atomic_download("module", fake_download_fn_with_rogue_behavior,
+                                   module_dir))
+      self.assertEqual(tf.compat.v1.gfile.ListDirectory(module_dir), ["file"])
+      self.assertFalse(tf.compat.v1.gfile.Exists(
+          resolver._lock_filename(module_dir)))
+
   def testModuleDownloadedWhenEmptyFolderExists(self):
     # Simulate the case when a module is cached in /tmp/module_dir but module
     # files inside the folder are deleted. In this case, the download should
@@ -257,22 +273,23 @@ class ResolverTest(tf.test.TestCase):
     module_dir = os.path.join(self.get_temp_dir(), "module")
     def fake_download_fn(handle, tmp_dir):
       del handle, tmp_dir
-      tf_v1.gfile.MakeDirs(module_dir)
+      tf.compat.v1.gfile.MakeDirs(module_dir)
       tf_utils.atomic_write_string_to_file(
           os.path.join(module_dir, "file"), "content", False)
 
     # Create an empty folder before downloading.
-    self.assertFalse(tf_v1.gfile.Exists(module_dir))
-    tf_v1.gfile.MakeDirs(module_dir)
+    self.assertFalse(tf.compat.v1.gfile.Exists(module_dir))
+    tf.compat.v1.gfile.MakeDirs(module_dir)
 
     self.assertEqual(
         module_dir,
         resolver.atomic_download("module", fake_download_fn, module_dir))
-    self.assertEqual(tf_v1.gfile.ListDirectory(module_dir), ["file"])
-    self.assertFalse(tf_v1.gfile.Exists(resolver._lock_filename(module_dir)))
+    self.assertEqual(tf.compat.v1.gfile.ListDirectory(module_dir), ["file"])
+    self.assertFalse(tf.compat.v1.gfile.Exists(
+        resolver._lock_filename(module_dir)))
     parent_dir = os.path.abspath(os.path.join(module_dir, ".."))
     self.assertEqual(
-        sorted(tf_v1.gfile.ListDirectory(parent_dir)),
+        sorted(tf.compat.v1.gfile.ListDirectory(parent_dir)),
         ["module", "module.descriptor.txt"])
     self.assertRegexpMatches(
         tf_utils.read_file_to_string(
@@ -304,7 +321,7 @@ class ResolverTest(tf.test.TestCase):
 
     def first_download_fn(handle, tmp_dir):
       del handle, tmp_dir
-      tf_v1.gfile.MakeDirs(module_dir)
+      tf.compat.v1.gfile.MakeDirs(module_dir)
       tf_utils.atomic_write_string_to_file(
           os.path.join(module_dir, "file"), "content", False)
       second_download_thread.start()
@@ -334,7 +351,7 @@ class ResolverTest(tf.test.TestCase):
     def kill_download(handle, tmp_dir):
       del handle, tmp_dir
       # Simulate lock loss by removing the lock.
-      tf_v1.gfile.Remove(resolver._lock_filename(module_dir))
+      tf.compat.v1.gfile.Remove(resolver._lock_filename(module_dir))
       # Throw an error to simulate aborted download.
       raise OSError(download_aborted_msg)
 
@@ -345,28 +362,7 @@ class ResolverTest(tf.test.TestCase):
       pass
     parent_dir = os.path.abspath(os.path.join(module_dir, ".."))
     # Test that all files got cleaned up.
-    self.assertEqual(tf_v1.gfile.ListDirectory(parent_dir), [])
-
-  def testMergePath(self):
-    self.assertEqual(
-        resolver._merge_relative_path("gs://module-cache", ""),
-        "gs://module-cache")
-    self.assertEqual(
-        resolver._merge_relative_path("gs://module-cache", "./"),
-        "gs://module-cache")
-    self.assertEqual(
-        resolver._merge_relative_path("gs://module-cache", "./file"),
-        "gs://module-cache/file")
-    self.assertEqual(
-        resolver._merge_relative_path("gs://module-cache", "hello/../bla"),
-        "gs://module-cache/bla")
-    self.assertEqual(
-        resolver._merge_relative_path("gs://module-cache", "/"),
-        "gs://module-cache", "/")
-    with self.assertRaisesRegexp(ValueError, "is invalid"):
-      resolver._merge_relative_path("gs://module-cache", "/../")
-    with self.assertRaisesRegexp(ValueError, "is invalid"):
-      resolver._merge_relative_path("gs://module-cache", "hello/../../bla")
+    self.assertEqual(tf.compat.v1.gfile.ListDirectory(parent_dir), [])
 
   def testNotFoundGCSBucket(self):
     # When trying to use not existing GCS bucket, test that
@@ -380,7 +376,7 @@ class ResolverTest(tf.test.TestCase):
 
     # Simulate missing GCS bucket by raising NotFoundError in
     # atomic_write_string_to_file.
-    with mock.patch(
+    with unittest.mock.patch(
         "tensorflow_hub.tf_utils.atomic_write_string_to_file") as mock_:
       mock_.side_effect = tf.errors.NotFoundError(None, None, "Test")
       try:
@@ -389,5 +385,64 @@ class ResolverTest(tf.test.TestCase):
       except tf.errors.NotFoundError as e:
         self.assertEqual("Test", e.message)
 
+
+class UncompressedResolverTest(tf.test.TestCase):
+
+  def testModuleRunningWithUncompressedContext(self):
+    module_export_path = os.path.join(self.get_temp_dir(), "module")
+    with tf.Graph().as_default():
+      test_utils.export_module(module_export_path)
+      # Mock the server by returning the path to the local uncompressed module
+      with mock.patch.object(
+          uncompressed_module_resolver.HttpUncompressedFileResolver,
+          "_request_gcs_location",
+          return_value=module_export_path) as mocked_urlopen:
+        with test_utils.UncompressedLoadFormatContext():
+          m = hub.Module("https://tfhub.dev/google/model/1")
+        mocked_urlopen.assert_called_once_with(
+            "https://tfhub.dev/google/model/1?tf-hub-format=uncompressed")
+      out = m(11)
+      with tf.compat.v1.Session() as sess:
+        self.assertAllClose(sess.run(out), 121)
+
+
+class LoadFormatResolverBehaviorTest(tf.test.TestCase):
+  """Test that the right resolvers are called depending on the load format."""
+
+  def _assert_resolver_is_called(self, http_resolver):
+    module_url = "https://tfhub.dev/google/model/1"
+    with mock.patch.object(
+        http_resolver, "__call__", side_effect=ValueError) as mocked_call:
+      try:
+        hub.Module(module_url)
+        self.fail("Failure expected since mock raises it as side effect.")
+      except ValueError:
+        pass
+    mocked_call.assert_called_once_with(module_url)
+
+  def _assert_compressed_resolver_called(self):
+    self._assert_resolver_is_called(
+        compressed_module_resolver.HttpCompressedFileResolver)
+
+  def _assert_uncompressed_resolver_called(self):
+    self._assert_resolver_is_called(
+        uncompressed_module_resolver.HttpUncompressedFileResolver)
+
+  def test_load_format_auto(self):
+    # ModelLoadFormat is set to AUTO on default
+    self._assert_compressed_resolver_called()
+
+  def test_load_format_compressed(self):
+    with test_utils.CompressedLoadFormatContext():
+      self._assert_compressed_resolver_called()
+
+  def test_load_format_uncompressed(self):
+    with test_utils.UncompressedLoadFormatContext():
+      self._assert_uncompressed_resolver_called()
+
+
 if __name__ == "__main__":
+  # Make OSS configuration used for resolvers/loaders.
+  registry._clear()
+  config._run()
   tf.test.main()

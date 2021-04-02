@@ -14,25 +14,19 @@
 # ==============================================================================
 """The deprecated hub.Module class of TensorFlow Hub."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import contextlib
 
-import six
 import tensorflow as tf
 
 from tensorflow_hub import module_spec
 from tensorflow_hub import registry
 from tensorflow_hub import tensor_info
-from tensorflow_hub import tf_v1
 
 
 def as_module_spec(spec):
   if isinstance(spec, module_spec.ModuleSpec):
     return spec
-  elif isinstance(spec, six.string_types):
+  elif isinstance(spec, str):
     return load_module_spec(spec)
   else:
     raise ValueError("Unknown module spec type: %r" % type(spec))
@@ -41,8 +35,10 @@ def as_module_spec(spec):
 def load_module_spec(path):
   """Loads a ModuleSpec from a TF Hub service or the filesystem.
 
-  DEPRECATION NOTE: This belongs to the hub.Module API and file format for TF1.
+  Warning: Deprecated. This belongs to the hub.Module API and TF1 Hub format.
   For TF2, switch to plain SavedModels and hub.load(); see also hub.resolve().
+
+  THIS FUNCTION IS DEPRECATED.
 
   Args:
     path: string describing the location of a module. There are several
@@ -76,9 +72,9 @@ def export_module_spec(spec, path, checkpoint_path, name_transform_fn):
     assign_map = {
         name_transform_fn(name): value for name, value in m.variable_map.items()
     }
-    tf_v1.train.init_from_checkpoint(checkpoint_path, assign_map)
-    init_op = tf_v1.initializers.global_variables()
-    with tf_v1.Session() as session:
+    tf.compat.v1.train.init_from_checkpoint(checkpoint_path, assign_map)
+    init_op = tf.compat.v1.initializers.global_variables()
+    with tf.compat.v1.Session() as session:
       session.run(init_op)
       m.export(path, session)
 
@@ -88,7 +84,7 @@ def export_module_spec(spec, path, checkpoint_path, name_transform_fn):
 class Module(object):
   """Part of a TensorFlow 1 model that can be transferred between models.
 
-  DEPRECATION NOTE: The hub.Module API and file format works for TF1 only.
+  Warning: Deprecated. The hub.Module API works for TF1 only.
   For TF2, switch to plain SavedModels and hub.load().
 
   A Module represents a part of a TensorFlow graph that can be exported to disk
@@ -119,6 +115,8 @@ class Module(object):
   that they will be used with common TensorFlow conventions such as session
   initialization and restore, use of collections for variables, regularization
   losses and updates, etc.
+
+  THIS FUNCTION IS DEPRECATED.
   """
 
   def __init__(self, spec, trainable=False, name="module", tags=None):
@@ -155,7 +153,7 @@ class Module(object):
       ValueError: if the requested graph variant does not exists.
       tf.errors.NotFoundError: if the requested graph contains unknown ops.
     """
-    self._graph = tf_v1.get_default_graph()
+    self._graph = tf.compat.v1.get_default_graph()
     self._spec = as_module_spec(spec)
     self._trainable = trainable
 
@@ -227,8 +225,9 @@ class Module(object):
     function graphs that execute all its ops (e.g. `tf.data.Dataset.map`).
 
     Args:
-      inputs: Inputs to the signature. A dict from input names to tensor
-        values. If the signature only expects one input, one may pass
+      inputs: Inputs to the signature. A dict from input names to input tensors
+        (incl. composite tensors, such as `SparseTensor` or `RaggedTensor`).
+        If the signature only expects one input, one may pass
         a single value. If the signature has no inputs, it may be omitted.
       _sentinel: Used to prevent positional parameters besides `inputs`.
       signature: A string with the signature name to apply. If none, the
@@ -237,15 +236,17 @@ class Module(object):
         of the signature as a dict or return only the default output.
 
     Returns:
-      A tensor (single or sparse) if the signature defines a default output or
-      a dict from strings (output names) to tensors if `as_dict=True` is used.
+      A tensor (incl. composite tensors, such as `SparseTensor` or
+      `RaggedTensor`) if the signature defines a default output; or a dict from
+      strings (output names) to tensors (incl. composite tensors) if
+      `as_dict=True` is used.
 
     Raises:
       TypeError: If there is a mismatch on arguments, inputs or outputs of
         the module signature.
       RuntimeError: If there are errors during creation of the signature graph.
     """
-    if self._graph is not tf_v1.get_default_graph():
+    if self._graph is not tf.compat.v1.get_default_graph():
       raise RuntimeError(
           "Module must be applied in the graph it was instantiated for.")
 
@@ -256,10 +257,12 @@ class Module(object):
     safe_signature = signature.replace(":", "_")
     name = "%s_apply_%s" % (self._name, safe_signature)
 
-    dict_inputs = _convert_dict_inputs(
-        inputs, self._spec.get_input_info_dict(signature=signature,
-                                               tags=self._tags))
+    input_tensor_infos = self._spec.get_input_info_dict(signature, self._tags)
+    output_tensor_infos = self._spec.get_output_info_dict(signature, self._tags)
+    _check_supported_types(input_tensor_infos, signature, "input")
+    _check_supported_types(output_tensor_infos, signature, "output")
 
+    dict_inputs = _convert_dict_inputs(inputs, input_tensor_infos)
     dict_outputs = self._impl.create_apply_graph(
         signature=signature,
         input_tensors=dict_inputs,
@@ -321,7 +324,7 @@ class Module(object):
     Raises:
       RuntimeError: if there is an issue during the export.
     """
-    if self._graph is not tf_v1.get_default_graph():
+    if self._graph is not tf.compat.v1.get_default_graph():
       raise RuntimeError("default graph differs from the graph where the "
                          "module was instantiated.")
     if self._graph is not session.graph:
@@ -383,22 +386,38 @@ def _try_get_state_scope(name, mark_name_scope_used=True):
     RuntimeError: if the name scope of the freshly created variable scope is
         already used.
   """
-  tmp_scope_name = tf_v1.get_variable_scope().name
+  tmp_scope_name = tf.compat.v1.get_variable_scope().name
   if tmp_scope_name:
     tmp_scope_name += "/"
   with tf.name_scope(tmp_scope_name):
     # Pick an unused variable scope.
-    with tf_v1.variable_scope(
+    with tf.compat.v1.variable_scope(
         None, default_name=name, auxiliary_name_scope=False) as vs:
       abs_state_scope = vs.name + "/"
     # Verify that the name scope is available and mark it used if requested.
-    graph = tf_v1.get_default_graph()
+    graph = tf.compat.v1.get_default_graph()
     unique_name_scope = graph.unique_name(name, mark_name_scope_used) + "/"
     if unique_name_scope != abs_state_scope:
       raise RuntimeError(
           "variable_scope %s was unused but the corresponding "
           "name_scope was already taken." % abs_state_scope)
   return abs_state_scope
+
+
+def _check_supported_types(tensor_infos, signature, arg_type):
+  """Raises a ValueError if any infos have unsupported types.
+
+  Args:
+    tensor_infos: dictionary from string name to TensorInfo.
+    signature: string signature name.
+    arg_type: `'input'` or `'output'` (for the error message)
+  """
+  for name, info in sorted(tensor_infos.items()):
+    if not info.is_supported_type:
+      raise ValueError(
+          "Signature %r expects a %s for %s %r, which is not supported"
+          " by this version of tensorflow_hub." %
+          (signature, info.type_spec.value_type.__name__, arg_type, name))
 
 
 def _prepare_dict_inputs(inputs, tensor_info_map):
@@ -444,7 +463,7 @@ def _convert_dict_inputs(inputs, tensor_info_map):
     - putting inputs into a dict, per _prepare_dict_inputs(),
     - converting all input values into tensors compatible with the
       expected input tensor (dtype, shape).
-    - check sparse/non-sparse tensor types.
+    - check composite tensor types.
 
   Args:
     inputs: inputs fed to Module.__call__().
@@ -486,13 +505,39 @@ def _prepare_outputs(dict_outputs, as_dict):
     raise TypeError("There is no output named 'default'. Use as_dict=True.")
 
 
+def _spec_to_placeholder(type_spec, name):
+  """Returns a tensor or composite tensor placeholder for the given TypeSpec.
+
+  Args:
+    type_spec: A `TypeSpec`.
+    name: The name prefix for the placeholder tensors.
+
+  Returns:
+    A placeholder tensor (if `type_spec` is a `TensorSpec`); or a value with
+    type `type_spec.value_type`, whose component tensors are placeholders.
+  """
+  flat_specs = tf.nest.flatten(type_spec, expand_composites=True)
+  if len(flat_specs) == 1:
+    flat_names = [name]
+  else:
+    flat_names = [
+        "{}.component_{}".format(name, i) for i in range(len(flat_specs))
+    ]
+  placeholders = [
+      tf.compat.v1.placeholder(s.dtype, s.shape, name)
+      for (s, name) in zip(flat_specs, flat_names)
+  ]
+  return tf.nest.pack_sequence_as(
+      type_spec, placeholders, expand_composites=True)
+
+
 @contextlib.contextmanager
 def eval_function_for_module(spec, tags=None):
   """Context manager that yields a function to directly evaluate a hub.Module.
 
-  DEPRECATION NOTE: This belongs to the hub.Module API and file format for TF1.
-  For TF2, switch to plain SavedModels and hub.load().
-  Eager evalutaion in TF2 obviates the need for this helper.
+  Warning: Deprecated. This belongs to the hub.Module API and TF1 Hub format.
+  For TF2, switch to plain SavedModels and hub.load(). Eager execution in
+  TF2 obviates the need for this helper.
 
   This creates a separate graph, in which all of the signatures of the module
   are instantiated. Then, it creates a session and initializes the module
@@ -509,6 +554,8 @@ def eval_function_for_module(spec, tags=None):
     embeddings = f(["Hello world!",], signature="mysignature")
   ```
 
+  THIS FUNCTION IS DEPRECATED.
+
   Args:
     spec: A ModuleSpec defining the Module to instantiate or a path where to
       load a ModuleSpec from via `load_module_spec`.
@@ -524,7 +571,7 @@ def eval_function_for_module(spec, tags=None):
     ValueError: if the requested graph variant does not exists.
   """
   # We create a separate graph and add all the signatures of the module to it.
-  original_graph = tf_v1.get_default_graph()
+  original_graph = tf.compat.v1.get_default_graph()
   with tf.Graph().as_default():
     module = Module(spec, tags=tags)
     input_tensors_per_signature = {}
@@ -532,19 +579,21 @@ def eval_function_for_module(spec, tags=None):
     for signature in module.get_signature_names():
       # We scope with the signature name as different signatures will likely
       # contain tensors with the same name (e.g. the input and output tensors).
-      with tf_v1.variable_scope(signature):
+      with tf.compat.v1.variable_scope(signature):
         input_tensors = {}
         for name, tensorinfo in module.get_input_info_dict(signature).items():
-          # We need to be care with the shape as it may be fully-known,
-          # partially-known or even unknown.
-          shape = tensorinfo.get_shape()
-          effective_shape = None if shape.dims is None else shape.as_list()
           if tensorinfo.is_sparse:
-            input_tensors[name] = tf_v1.sparse_placeholder(
-                tensorinfo.dtype, shape=effective_shape, name=name)
+            # There's a bug in sparse_placeholder that causes it to break if
+            # we pass in `TensorShape(None)` -- work around it by passing in
+            # `None` instead.
+            shape = tensorinfo.get_shape()
+            effective_shape = None if shape.dims is None else shape.as_list()
+            if tensorinfo.is_sparse:
+              input_tensors[name] = tf.compat.v1.sparse_placeholder(
+                  tensorinfo.dtype, shape=effective_shape, name=name)
           else:
-            input_tensors[name] = tf_v1.placeholder(
-                tensorinfo.dtype, shape=effective_shape, name=name)
+            input_tensors[name] = _spec_to_placeholder(tensorinfo.type_spec,
+                                                       name)
         input_tensors_per_signature[signature] = input_tensors
         output_tensors_per_signature[signature] = module(
             input_tensors_per_signature[signature],
@@ -552,7 +601,7 @@ def eval_function_for_module(spec, tags=None):
             as_dict=True)
 
   # Evaluating the tfhub module requires an active tensorflow session.
-    with tf_v1.train.SingularMonitoredSession() as sess:
+    with tf.compat.v1.train.SingularMonitoredSession() as sess:
 
       def func(
           inputs=None,
