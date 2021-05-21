@@ -41,6 +41,8 @@ toc:
 - heading: "Image Tutorials"
   style: divider
 - title: Image classification
+  path: /hub/tutorials/image_classification
+- title: Transfer Learning for Image classification
   path: /hub/tutorials/tf2_image_retraining
 - title: Style transfer
   path: /hub/tutorials/tf2_arbitrary_image_stylization
@@ -48,11 +50,15 @@ toc:
   path: /hub/tutorials/tf2_object_detection
 - title: GANs for image generation
   path: /hub/tutorials/tf_hub_generative_image_module
+- title: Human Pose Estimation
+  path: /hub/tutorials/movenet
 - title: "Additional image tutorials"
   style: accordion
   section:
   - title: "CropNet: Cassava Disease Detection"
     path: /hub/tutorials/cropnet_cassava
+  - title: "CropNet: Fine tuning models for on-device inference"
+    path: /hub/tutorials/cropnet_on_device
   - title: Boundless GAN
     path: /hub/tutorials/boundless
   - title: Super resolution

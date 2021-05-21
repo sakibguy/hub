@@ -12,10 +12,16 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================-->
-# Current version 0.12.0-dev
+# Current version 0.13.0-dev
+  * Under development
+
+# Release 0.12.0
+  * Improve support for `compute_output_shape` in `hub.KerasLayer`:
+    * This will now use the `output_shape` value provided on init, if present,
+      before falling back to the default behavior.
   * Changes to make_image_classifier_tool:
-    * Add the option to read input with a tf.data.Dataset and use TF ops for 
-      preprocessing. Enabling this feature is
+    * Add the option to read input with a tf.data.Dataset and use TF ops for
+      preprocessing. Enabling this feature requires TF 2.5 or higher.
     * Set the default value of shear_range to 0. shear_range is deprecated and
       incompatible when using TF ops for preprocessing.
 
